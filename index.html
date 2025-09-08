@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文章列表与日历视图</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 15px;
+            background-color: #f8f9fa;
+        }
+        h1 {
+            text-align: center;
+            color: #495057;
+        }
+        #loader {
+            text-align: center;
+            font-size: 1.2em;
+            padding: 40px;
+        }
+        
+        /* 年份切换器 */
+        #year-selector {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        #year-selector select {
+            padding: 8px 15px;
+            font-size: 16px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            background-color: #fff;
+        }
+        
+        /* 月份日历网格 */
+        #calendar-container {
+            margin-bottom: 30px;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: #fff;
+        }
+        #month-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .month-calendar {
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 10px;
+            background-color: #f8f9fa;
+        }
+        .month-title {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #495057;
+        }
+        .day-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 2px;
+        }
+        .day-cell {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+            background-color: #fff;
+            border: 1px solid #e9ecef;
+            transition: all 0.2s;
+        }
+        .day-cell:hover {
+            background-color: #e3f2fd;
+        }
+        .day-cell.has-articles {
+            background-color: #bbdefb;
+            font-weight: bold;
+        }
+        .day-cell.active {
+            background-color: #2196f3;
+            color: white;
+        }
+        .day-cell .article-count {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background-color: #f44336;
+            color: white;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        
+        /* 文章列表样式 */
+        #article-list {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        #article-list article {
+            background-color: #fff;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+        }
+        #article-list h3 {
+            margin: 0 0 10px;
+            font-size: 1.1em;
+            color: #212529;
+        }
+        #article-list .meta {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-bottom: 10px;
+        }
+        #article-list .links a {
+            color: #007bff;
+            text-decoration: none;
+            margin-right: 15px;
+            font-size: 0.9em;
+        }
+        #article-list .links a:hover {
+            text-decoration: underline;
+        }
+        
+        /* 统计信息 */
+        .stats {
+            text-align: center;
+            color: #6c757d;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>文章归档</h1>
+
+    <div id="loader">正在加载数据...</div>
+
+    <div id="year-selector" style="display: none;">
+        <label for="year-select">选择年份：</label>
+        <select id="year-select">
+            <option value="">全部年份</option>
+        </select>
+    </div>
+
+    <div id="calendar-container" style="display: none;">
+        <h2>日历视图</h2>
+        <div class="stats" id="stats"></div>
+        <div id="month-grid"></div>
+    </div>
+
+    <div id="article-list"></div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const loader = document.getElementById('loader');
+        const articleList = document.getElementById('article-list');
+        const calendarContainer = document.getElementById('calendar-container');
+        const yearSelector = document.getElementById('year-selector');
+        const yearSelect = document.getElementById('year-select');
+        const monthGrid = document.getElementById('month-grid');
+        const stats = document.getElementById('stats');
+
+        let articlesByDate = new Map();
+        let allArticles = [];
+        let currentYear = '';
+        let activeDateElement = null;
+
+        // 加载并处理CSV数据
+        async function loadData() {
+            try {
+                const response = await fetch('data.csv');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const csvText = await response.text();
+                
+                // 优化的CSV解析
+                const lines = csvText.trim().split('\n').slice(1);
+                allArticles = [];
+                
+                for (const line of lines) {
+                    // 改进的解析逻辑
+                    const parts = [];
+                    let current = '';
+                    let inQuotes = false;
+                    
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            parts.push(current);
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    parts.push(current); // 添加最后一部分
+                    
+                    if (parts.length >= 4) {
+                        const [id, time, title, url] = parts;
+                        const cleanTitle = title.replace(/^"|"$/g, ''); // 移除首尾引号
+                        
+                        allArticles.push({
+                            id: id.trim(),
+                            time: new Date(time.trim()),
+                            title: cleanTitle.trim(),
+                            url: url.trim()
+                        });
+                    }
+                }
+
+                // 按日期分组
+                allArticles.forEach(article => {
+                    const dateKey = getGmt8DateString(article.time);
+                    if (!articlesByDate.has(dateKey)) {
+                        articlesByDate.set(dateKey, []);
+                    }
+                    articlesByDate.get(dateKey).push(article);
+                });
+
+                // 获取所有年份
+                const years = [...new Set(allArticles.map(article => 
+                    article.time.getFullYear()
+                ))].sort((a, b) => b - a);
+
+                // 填充年份选择器
+                years.forEach(year => {
+                    const option = document.createElement('option');
+                    option.value = year;
+                    option.textContent = year;
+                    yearSelect.appendChild(option);
+                });
+
+                loader.style.display = 'none';
+                yearSelector.style.display = 'block';
+                calendarContainer.style.display = 'block';
+
+                // 默认显示最新年份
+                currentYear = years[0]?.toString() || '';
+                yearSelect.value = currentYear;
+                
+                renderCalendar();
+                renderArticles(allArticles);
+                updateStats();
+
+            } catch (error) {
+                loader.textContent = `加载数据失败: ${error.message}。请确保 data.csv 文件存在于同级目录。`;
+                console.error('Failed to load or parse data:', error);
+            }
+        }
+
+        // 年份选择器事件
+        yearSelect.addEventListener('change', (e) => {
+            currentYear = e.target.value;
+            renderCalendar();
+            updateStats();
+            // 重置文章列表
+            if (activeDateElement) {
+                activeDateElement.classList.remove('active');
+                activeDateElement = null;
+            }
+            const filteredArticles = currentYear ? 
+                allArticles.filter(article => article.time.getFullYear().toString() === currentYear) :
+                allArticles;
+            renderArticles(filteredArticles);
+        });
+        
+        function getGmt8DateString(date) {
+            const year = date.toLocaleString('en-CA', { year: 'numeric', timeZone: 'Asia/Shanghai' });
+            const month = date.toLocaleString('en-CA', { month: '2-digit', timeZone: 'Asia/Shanghai' });
+            const day = date.toLocaleString('en-CA', { day: '2-digit', timeZone: 'Asia/Shanghai' });
+            return `${year}-${month}-${day}`;
+        }
+
+        // 渲染日历（按月份网格显示）
+        function renderCalendar() {
+            monthGrid.innerHTML = '';
+            
+            const year = currentYear ? parseInt(currentYear) : null;
+            
+            if (!year) {
+                // 如果没有选择年份，显示简化视图
+                monthGrid.innerHTML = '<p style="text-align: center; color: #6c757d;">请选择年份查看日历</p>';
+                return;
+            }
+
+            for (let month = 0; month < 12; month++) {
+                const monthDiv = document.createElement('div');
+                monthDiv.className = 'month-calendar';
+                
+                const monthTitle = document.createElement('div');
+                monthTitle.className = 'month-title';
+                monthTitle.textContent = `${year}年${month + 1}月`;
+                
+                const dayGrid = document.createElement('div');
+                dayGrid.className = 'day-grid';
+                
+                // 添加星期标题
+                const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+                weekdays.forEach(day => {
+                    const weekdayCell = document.createElement('div');
+                    weekdayCell.textContent = day;
+                    weekdayCell.style.fontWeight = 'bold';
+                    weekdayCell.style.color = '#6c757d';
+                    weekdayCell.style.fontSize = '10px';
+                    dayGrid.appendChild(weekdayCell);
+                });
+                
+                // 获取当月第一天和最后一天
+                const firstDay = new Date(year, month, 1);
+                const lastDay = new Date(year, month + 1, 0);
+                const startPadding = firstDay.getDay();
+                
+                // 添加前面的空白格子
+                for (let i = 0; i < startPadding; i++) {
+                    const emptyCell = document.createElement('div');
+                    emptyCell.className = 'day-cell';
+                    dayGrid.appendChild(emptyCell);
+                }
+                
+                // 添加当月的日期
+                for (let day = 1; day <= lastDay.getDate(); day++) {
+                    const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const dayCell = document.createElement('div');
+                    dayCell.className = 'day-cell';
+                    dayCell.textContent = day;
+                    dayCell.dataset.date = dateKey;
+                    
+                    const articleCount = articlesByDate.get(dateKey)?.length || 0;
+                    if (articleCount > 0) {
+                        dayCell.classList.add('has-articles');
+                        if (articleCount > 1) {
+                            const countBadge = document.createElement('span');
+                            countBadge.className = 'article-count';
+                            countBadge.textContent = articleCount;
+                            dayCell.appendChild(countBadge);
+                        }
+                        
+                        dayCell.addEventListener('click', () => {
+                            if (dayCell.classList.contains('active')) {
+                                dayCell.classList.remove('active');
+                                activeDateElement = null;
+                                const yearArticles = currentYear ? 
+                                    allArticles.filter(article => article.time.getFullYear().toString() === currentYear) :
+                                    allArticles;
+                                renderArticles(yearArticles);
+                            } else {
+                                if (activeDateElement) {
+                                    activeDateElement.classList.remove('active');
+                                }
+                                dayCell.classList.add('active');
+                                activeDateElement = dayCell;
+                                renderArticles(articlesByDate.get(dateKey) || []);
+                            }
+                        });
+                    }
+                    
+                    dayGrid.appendChild(dayCell);
+                }
+                
+                monthDiv.appendChild(monthTitle);
+                monthDiv.appendChild(dayGrid);
+                monthGrid.appendChild(monthDiv);
+            }
+        }
+
+        // 更新统计信息
+        function updateStats() {
+            const filteredArticles = currentYear ? 
+                allArticles.filter(article => article.time.getFullYear().toString() === currentYear) :
+                allArticles;
+            
+            const yearText = currentYear ? `${currentYear}年` : '全部年份';
+            const daysWithArticles = new Set(filteredArticles.map(article => getGmt8DateString(article.time))).size;
+            
+            stats.textContent = `${yearText}共${filteredArticles.length}篇文章，分布在${daysWithArticles}天`;
+        }
+
+        // 渲染文章列表（使用文档片段优化性能）
+        function renderArticles(articles) {
+            articleList.innerHTML = '';
+            
+            if (!articles || articles.length === 0) {
+                articleList.innerHTML = '<p style="text-align: center; color: #6c757d; padding: 40px;">没有找到相关文章。</p>';
+                return;
+            }
+            
+            // 按时间倒序排列
+            const sortedArticles = [...articles].sort((a, b) => b.time - a.time);
+            
+            // 使用DocumentFragment提高性能
+            const fragment = document.createDocumentFragment();
+            
+            sortedArticles.forEach(article => {
+                const articleEl = document.createElement('article');
+                
+                articleEl.innerHTML = `
+                    <h3>${escapeHtml(article.title)}</h3>
+                    <div class="meta">发布于: ${article.time.toLocaleString('zh-CN', { 
+                        timeZone: 'Asia/Shanghai', 
+                        hour12: false 
+                    })}</div>
+                    <div class="links">
+                        <a href="https://web.archive.org/web/${encodeURIComponent(article.url)}" target="_blank" rel="noopener noreferrer">互联网图书馆</a>
+                        <a href="https://www.bing.com/search?q=${encodeURIComponent(article.title)}" target="_blank" rel="noopener noreferrer">Bing搜索</a>
+                        <a href="https://www.google.com/search?q=${encodeURIComponent(article.title)}" target="_blank" rel="noopener noreferrer">Google搜索</a>
+                    </div>
+                `;
+                
+                fragment.appendChild(articleEl);
+            });
+            
+            articleList.appendChild(fragment);
+        }
+
+        // HTML转义函数
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        loadData();
+    });
+    </script>
+</body>
+</html>
