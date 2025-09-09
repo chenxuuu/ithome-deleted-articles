@@ -267,64 +267,36 @@
                     step.classList.remove('active', 'completed');
                 });
                 
-                // 标记已完成的步骤
-                let foundCurrent = false;
-                document.querySelectorAll('.loading-step').forEach(step => {
-                    if (step.id === stepId) {
-                        step.classList.add('active');
-                        foundCurrent = true;
-                    } else if (!foundCurrent) {
+                // 标记已完成的步骤和当前步骤
+                const stepIds = ['step-fetch', 'step-parse', 'step-process', 'step-calendar', 'step-render'];
+                const currentIndex = stepIds.indexOf(stepId);
+                
+                stepIds.forEach((id, index) => {
+                    const step = document.getElementById(id);
+                    if (index < currentIndex) {
                         step.classList.add('completed');
+                    } else if (index === currentIndex) {
+                        step.classList.add('active');
                     }
                 });
             }
         }
 
-        // 模拟延迟函数（让用户能看到进度变化）
+        // 延迟函数，确保UI能够更新
         function delay(ms) {
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        // 加载并处理CSV数据
-        async function loadData() {
-            try {
-                // 步骤1: 下载文件
-                updateProgress(0, '正在下载 CSV 文件...', 'step-fetch');
-                await delay(100);
+        // 分批处理数据，避免阻塞UI
+        async function processDataInBatches(lines, batchSize = 50) {
+            const articles = [];
+            const totalLines = lines.length;
+            
+            for (let i = 0; i < lines.length; i += batchSize) {
+                const batch = lines.slice(i, i + batchSize);
                 
-                const response = await fetch('data.csv');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                updateProgress(20, '文件下载完成，正在读取内容...', 'step-fetch');
-                const csvText = await response.text();
-                
-                // 步骤2: 解析数据
-                updateProgress(25, '开始解析 CSV 数据...', 'step-parse');
-                await delay(50);
-                
-                const lines = csvText.trim().split('\n').slice(1);
-                const totalLines = lines.length;
-                
-                updateProgress(30, `发现 ${totalLines} 条记录，开始解析...`, 'step-parse');
-                await delay(100);
-
-                // 步骤3: 处理数据
-                updateProgress(35, '正在处理文章数据...', 'step-process');
-                allArticles = [];
-                
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i];
-                    
-                    // 每处理100条数据更新一次进度
-                    if (i % 100 === 0) {
-                        const progress = 35 + (i / totalLines) * 30; // 35% 到 65%
-                        updateProgress(progress, `已处理 ${i}/${totalLines} 条记录...`, 'step-process');
-                        await delay(1); // 短暂延迟让界面更新
-                    }
-                    
-                    // 改进的解析逻辑
+                // 处理当前批次
+                for (const line of batch) {
                     const parts = [];
                     let current = '';
                     let inQuotes = false;
@@ -346,7 +318,7 @@
                         const [id, time, title, url] = parts;
                         const cleanTitle = title.replace(/^"|"$/g, '');
                         
-                        allArticles.push({
+                        articles.push({
                             id: id.trim(),
                             time: new Date(time.trim()),
                             title: cleanTitle.trim(),
@@ -354,19 +326,111 @@
                         });
                     }
                 }
+                
+                // 更新进度
+                const progress = 40 + (i / totalLines) * 30; // 40% 到 70%
+                updateProgress(progress, `已处理 ${Math.min(i + batchSize, totalLines)}/${totalLines} 条记录...`, 'step-process');
+                
+                // 让出控制权，让浏览器更新UI
+                await delay(10);
+            }
+            
+            return articles;
+        }
 
-                updateProgress(65, `数据处理完成，共 ${allArticles.length} 篇文章`, 'step-process');
+        // 使用流式读取来显示下载进度（如果浏览器支持）
+        async function fetchWithProgress(url) {
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const contentLength = response.headers.get('Content-Length');
+            if (!contentLength || !response.body) {
+                // 如果无法获取内容长度或不支持流，直接返回
+                updateProgress(20, '正在下载文件...', 'step-fetch');
+                return await response.text();
+            }
+
+            const total = parseInt(contentLength);
+            let loaded = 0;
+            const reader = response.body.getReader();
+            const chunks = [];
+
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) break;
+                
+                chunks.push(value);
+                loaded += value.length;
+                
+                const percentage = 5 + (loaded / total) * 15; // 5% 到 20%
+                updateProgress(percentage, `下载进度: ${(loaded / 1024 / 1024).toFixed(1)}MB / ${(total / 1024 / 1024).toFixed(1)}MB`, 'step-fetch');
+                
+                // 让出控制权
+                await delay(1);
+            }
+
+            // 将所有块合并成字符串
+            const allChunks = new Uint8Array(loaded);
+            let position = 0;
+            for (const chunk of chunks) {
+                allChunks.set(chunk, position);
+                position += chunk.length;
+            }
+
+            return new TextDecoder().decode(allChunks);
+        }
+
+        // 加载并处理CSV数据
+        async function loadData() {
+            try {
+                // 步骤1: 下载文件
+                updateProgress(0, '开始下载 CSV 文件...', 'step-fetch');
+                await delay(100);
+                
+                let csvText;
+                try {
+                    csvText = await fetchWithProgress('data.csv');
+                } catch (e) {
+                    // 如果流式下载失败，使用普通方式
+                    updateProgress(10, '正在下载文件...', 'step-fetch');
+                    const response = await fetch('data.csv');
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    csvText = await response.text();
+                }
+                
+                updateProgress(25, '文件下载完成！', 'step-fetch');
+                await delay(200);
+                
+                // 步骤2: 解析数据
+                updateProgress(30, '开始解析 CSV 数据...', 'step-parse');
+                await delay(100);
+                
+                const lines = csvText.trim().split('\n').slice(1);
+                const totalLines = lines.length;
+                
+                updateProgress(35, `发现 ${totalLines} 条记录`, 'step-parse');
                 await delay(200);
 
+                // 步骤3: 处理数据
+                updateProgress(40, '开始处理文章数据...', 'step-process');
+                await delay(100);
+                
+                allArticles = await processDataInBatches(lines);
+
+                updateProgress(70, `数据处理完成，共解析出 ${allArticles.length} 篇文章`, 'step-process');
+                await delay(300);
+
                 // 按日期分组
-                updateProgress(70, '正在按日期分组...', 'step-process');
-                allArticles.forEach((article, index) => {
-                    if (index % 500 === 0) {
-                        // 每500条更新一次进度
-                        const progress = 70 + (index / allArticles.length) * 10;
-                        updateProgress(progress, `分组进度: ${index}/${allArticles.length}`, 'step-process');
-                    }
-                    
+                updateProgress(75, '正在按日期分组...', 'step-process');
+                await delay(100);
+                
+                allArticles.forEach((article) => {
                     const dateKey = getGmt8DateString(article.time);
                     if (!articlesByDate.has(dateKey)) {
                         articlesByDate.set(dateKey, []);
@@ -374,8 +438,11 @@
                     articlesByDate.get(dateKey).push(article);
                 });
 
+                updateProgress(80, `数据分组完成，共 ${articlesByDate.size} 个不同日期`, 'step-process');
+                await delay(200);
+
                 // 步骤4: 生成日历
-                updateProgress(80, '正在生成日历数据...', 'step-calendar');
+                updateProgress(85, '正在生成日历数据...', 'step-calendar');
                 await delay(100);
 
                 // 获取所有年份
@@ -383,7 +450,8 @@
                     article.time.getFullYear()
                 ))].sort((a, b) => b - a);
 
-                updateProgress(85, `发现 ${years.length} 个年份的数据`, 'step-calendar');
+                updateProgress(88, `发现 ${years.length} 个年份: ${years.join(', ')}`, 'step-calendar');
+                await delay(200);
 
                 // 填充年份选择器
                 years.forEach(year => {
@@ -395,16 +463,18 @@
 
                 // 步骤5: 渲染页面
                 updateProgress(90, '正在渲染页面...', 'step-render');
-                await delay(200);
+                await delay(100);
 
                 // 默认显示最新年份
                 currentYear = years[0]?.toString() || '';
                 yearSelect.value = currentYear;
 
-                updateProgress(95, '正在生成日历视图...', 'step-render');
+                updateProgress(93, '正在生成日历视图...', 'step-render');
+                await delay(100);
                 renderCalendar();
                 
-                updateProgress(98, '正在加载文章列表...', 'step-render');
+                updateProgress(96, '正在加载文章列表...', 'step-render');
+                await delay(100);
                 renderArticles(allArticles);
                 updateStats();
 
@@ -416,6 +486,8 @@
                     step.classList.remove('active');
                     step.classList.add('completed');
                 });
+
+                await delay(300);
 
                 // 隐藏加载器，显示内容
                 loader.style.display = 'none';
