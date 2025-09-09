@@ -18,10 +18,63 @@
             text-align: center;
             color: #495057;
         }
+        
+        /* 加载器样式 */
         #loader {
             text-align: center;
-            font-size: 1.2em;
             padding: 40px;
+        }
+        #loader h3 {
+            margin-bottom: 20px;
+            color: #495057;
+        }
+        .progress-container {
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto 15px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 20px;
+            background: linear-gradient(90deg, #007bff, #0056b3);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 10px;
+            position: relative;
+        }
+        .progress-text {
+            margin-top: 10px;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .loading-steps {
+            text-align: left;
+            max-width: 300px;
+            margin: 20px auto;
+        }
+        .loading-step {
+            padding: 5px 0;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .loading-step.active {
+            color: #007bff;
+            font-weight: bold;
+        }
+        .loading-step.completed {
+            color: #28a745;
+        }
+        .loading-step::before {
+            content: "⏳ ";
+            margin-right: 8px;
+        }
+        .loading-step.active::before {
+            content: "🔄 ";
+        }
+        .loading-step.completed::before {
+            content: "✅ ";
         }
         
         /* 年份切换器 */
@@ -152,7 +205,21 @@
 
     <h1>文章归档</h1>
 
-    <div id="loader">正在加载数据...</div>
+    <div id="loader">
+        <h3>正在加载数据</h3>
+        <div class="progress-container">
+            <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div class="progress-text" id="progress-text">准备开始...</div>
+        
+        <div class="loading-steps">
+            <div class="loading-step" id="step-fetch">下载 CSV 文件</div>
+            <div class="loading-step" id="step-parse">解析数据格式</div>
+            <div class="loading-step" id="step-process">处理文章数据</div>
+            <div class="loading-step" id="step-calendar">生成日历视图</div>
+            <div class="loading-step" id="step-render">渲染页面内容</div>
+        </div>
+    </div>
 
     <div id="year-selector" style="display: none;">
         <label for="year-select">选择年份：</label>
@@ -178,33 +245,92 @@
         const yearSelect = document.getElementById('year-select');
         const monthGrid = document.getElementById('month-grid');
         const stats = document.getElementById('stats');
+        
+        // 进度相关元素
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
 
         let articlesByDate = new Map();
         let allArticles = [];
         let currentYear = '';
         let activeDateElement = null;
 
+        // 更新进度
+        function updateProgress(percentage, text, stepId) {
+            progressBar.style.width = percentage + '%';
+            progressText.textContent = text;
+            
+            // 更新步骤状态
+            if (stepId) {
+                // 重置所有步骤状态
+                document.querySelectorAll('.loading-step').forEach(step => {
+                    step.classList.remove('active', 'completed');
+                });
+                
+                // 标记已完成的步骤
+                let foundCurrent = false;
+                document.querySelectorAll('.loading-step').forEach(step => {
+                    if (step.id === stepId) {
+                        step.classList.add('active');
+                        foundCurrent = true;
+                    } else if (!foundCurrent) {
+                        step.classList.add('completed');
+                    }
+                });
+            }
+        }
+
+        // 模拟延迟函数（让用户能看到进度变化）
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
         // 加载并处理CSV数据
         async function loadData() {
             try {
+                // 步骤1: 下载文件
+                updateProgress(0, '正在下载 CSV 文件...', 'step-fetch');
+                await delay(100);
+                
                 const response = await fetch('data.csv');
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                
+                updateProgress(20, '文件下载完成，正在读取内容...', 'step-fetch');
                 const csvText = await response.text();
                 
-                // 优化的CSV解析
+                // 步骤2: 解析数据
+                updateProgress(25, '开始解析 CSV 数据...', 'step-parse');
+                await delay(50);
+                
                 const lines = csvText.trim().split('\n').slice(1);
+                const totalLines = lines.length;
+                
+                updateProgress(30, `发现 ${totalLines} 条记录，开始解析...`, 'step-parse');
+                await delay(100);
+
+                // 步骤3: 处理数据
+                updateProgress(35, '正在处理文章数据...', 'step-process');
                 allArticles = [];
                 
-                for (const line of lines) {
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    
+                    // 每处理100条数据更新一次进度
+                    if (i % 100 === 0) {
+                        const progress = 35 + (i / totalLines) * 30; // 35% 到 65%
+                        updateProgress(progress, `已处理 ${i}/${totalLines} 条记录...`, 'step-process');
+                        await delay(1); // 短暂延迟让界面更新
+                    }
+                    
                     // 改进的解析逻辑
                     const parts = [];
                     let current = '';
                     let inQuotes = false;
                     
-                    for (let i = 0; i < line.length; i++) {
-                        const char = line[i];
+                    for (let j = 0; j < line.length; j++) {
+                        const char = line[j];
                         if (char === '"') {
                             inQuotes = !inQuotes;
                         } else if (char === ',' && !inQuotes) {
@@ -214,11 +340,11 @@
                             current += char;
                         }
                     }
-                    parts.push(current); // 添加最后一部分
+                    parts.push(current);
                     
                     if (parts.length >= 4) {
                         const [id, time, title, url] = parts;
-                        const cleanTitle = title.replace(/^"|"$/g, ''); // 移除首尾引号
+                        const cleanTitle = title.replace(/^"|"$/g, '');
                         
                         allArticles.push({
                             id: id.trim(),
@@ -229,8 +355,18 @@
                     }
                 }
 
+                updateProgress(65, `数据处理完成，共 ${allArticles.length} 篇文章`, 'step-process');
+                await delay(200);
+
                 // 按日期分组
-                allArticles.forEach(article => {
+                updateProgress(70, '正在按日期分组...', 'step-process');
+                allArticles.forEach((article, index) => {
+                    if (index % 500 === 0) {
+                        // 每500条更新一次进度
+                        const progress = 70 + (index / allArticles.length) * 10;
+                        updateProgress(progress, `分组进度: ${index}/${allArticles.length}`, 'step-process');
+                    }
+                    
                     const dateKey = getGmt8DateString(article.time);
                     if (!articlesByDate.has(dateKey)) {
                         articlesByDate.set(dateKey, []);
@@ -238,10 +374,16 @@
                     articlesByDate.get(dateKey).push(article);
                 });
 
+                // 步骤4: 生成日历
+                updateProgress(80, '正在生成日历数据...', 'step-calendar');
+                await delay(100);
+
                 // 获取所有年份
                 const years = [...new Set(allArticles.map(article => 
                     article.time.getFullYear()
                 ))].sort((a, b) => b - a);
+
+                updateProgress(85, `发现 ${years.length} 个年份的数据`, 'step-calendar');
 
                 // 填充年份选择器
                 years.forEach(year => {
@@ -251,20 +393,39 @@
                     yearSelect.appendChild(option);
                 });
 
-                loader.style.display = 'none';
-                yearSelector.style.display = 'block';
-                calendarContainer.style.display = 'block';
+                // 步骤5: 渲染页面
+                updateProgress(90, '正在渲染页面...', 'step-render');
+                await delay(200);
 
                 // 默认显示最新年份
                 currentYear = years[0]?.toString() || '';
                 yearSelect.value = currentYear;
-                
+
+                updateProgress(95, '正在生成日历视图...', 'step-render');
                 renderCalendar();
+                
+                updateProgress(98, '正在加载文章列表...', 'step-render');
                 renderArticles(allArticles);
                 updateStats();
 
+                updateProgress(100, '加载完成！', 'step-render');
+                await delay(500);
+
+                // 标记所有步骤完成
+                document.querySelectorAll('.loading-step').forEach(step => {
+                    step.classList.remove('active');
+                    step.classList.add('completed');
+                });
+
+                // 隐藏加载器，显示内容
+                loader.style.display = 'none';
+                yearSelector.style.display = 'block';
+                calendarContainer.style.display = 'block';
+
             } catch (error) {
-                loader.textContent = `加载数据失败: ${error.message}。请确保 data.csv 文件存在于同级目录。`;
+                updateProgress(0, `加载失败: ${error.message}`, null);
+                progressBar.style.background = 'linear-gradient(90deg, #dc3545, #c82333)';
+                progressText.style.color = '#dc3545';
                 console.error('Failed to load or parse data:', error);
             }
         }
@@ -299,7 +460,6 @@
             const year = currentYear ? parseInt(currentYear) : null;
             
             if (!year) {
-                // 如果没有选择年份，显示简化视图
                 monthGrid.innerHTML = '<p style="text-align: center; color: #6c757d;">请选择年份查看日历</p>';
                 return;
             }
